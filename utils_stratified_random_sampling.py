@@ -550,7 +550,7 @@ def reconcile_allocation_with_pilot(neyman_allocation, pilot_allocation, v=False
 
 def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
                          pilot_truth=None, id_col="id", stratum_col="stratum",
-                         match_col="_sample_key", v=False):
+                         match_col="_sample_key", true_col="true_stratum", v=False):
     """
     Reproject a sample GeoDataFrame to EPSG:4326 and export it as CSV
     (lat/lon columns) and GeoJSON (point geometry) for use in an external
@@ -569,7 +569,7 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
         {0: "Non-cropland", 1: "Cropland"}.
     pilot_truth : pd.DataFrame, optional
         Annotated pilot sample (e.g. from `load_pilot_annotations`), with
-        at least [match_col, 'true_stratum']. Where a unit's `match_col`
+        at least [match_col, true_col]. Where a unit's `match_col`
         matches a pilot unit's, its annotation is copied in and `in_pilot`
         set True -- those units are already labeled and don't need
         re-annotating, which is what makes the pilot sample "reusable"
@@ -578,14 +578,14 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
         since `id_col` is reassigned after each round's own shuffle and so
         differs between the pilot's export and this one for the same unit.
 
-        When `pilot_truth` is given, `true_stratum`/`true_stratum_label`
+        When `pilot_truth` is given, `true_col`/`true_stratum_label`
         are included in the export to carry those known pilot values
         forward (this is the master bookkeeping file). When it's None
         (a fresh annotation-round export), those columns are omitted
         entirely -- the annotation tool (e.g. STAC Notator) adds its own
-        `true_stratum` when the file comes back annotated, so there's no
-        need to ship an empty placeholder column out to it.
-    id_col, stratum_col, match_col : str
+        true-label column when the file comes back annotated, so there's
+        no need to ship an empty placeholder column out to it.
+    id_col, stratum_col, match_col, true_col : str
     v : bool
 
     Returns
@@ -602,19 +602,19 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
     cols = [id_col, "lat", "lon", stratum_col, "stratum_label", "in_pilot"]
 
     if pilot_truth is not None:
-        out["true_stratum"] = pd.NA
+        out[true_col] = pd.NA
         out["true_stratum_label"] = pd.NA
 
         truth = pilot_truth.set_index(match_col)
         matched = out[match_col].isin(truth.index)
         out.loc[matched, "in_pilot"] = True
-        out.loc[matched, "true_stratum"] = out.loc[matched, match_col].map(truth["true_stratum"])
+        out.loc[matched, true_col] = out.loc[matched, match_col].map(truth[true_col])
         if "true_stratum_label" in truth.columns:
             out.loc[matched, "true_stratum_label"] = out.loc[matched, match_col].map(truth["true_stratum_label"])
         else:
-            out.loc[matched, "true_stratum_label"] = out.loc[matched, "true_stratum"].map(stratum_labels)
+            out.loc[matched, "true_stratum_label"] = out.loc[matched, true_col].map(stratum_labels)
 
-        cols += ["true_stratum", "true_stratum_label"]
+        cols += [true_col, "true_stratum_label"]
 
     out_csv_df = out[cols].copy()
     out_csv_df.to_csv(out_csv, index=False)

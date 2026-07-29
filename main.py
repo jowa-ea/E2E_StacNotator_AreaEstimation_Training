@@ -39,13 +39,14 @@ def main():
     stratum_labels = {0: "Non-cropland", 1: "Cropland"}
     target_stratum = 1  # cropland: the stratum the accuracy threshold applies to
 
-    # How the annotation tool codes the SAME classes in its own true_stratum
-    # output -- may use different numeric keys than stratum_labels (e.g. the
-    # tool might call cropland "2" while the map calls it "1"), but must
-    # describe the exact same set of classes, spelled identically. Used to
-    # relabel true_stratum onto the map's own coding so pred/true always
-    # mean the same thing at the same numeric value.
-    stratum_true_labels = {1: "Non-cropland", 2: "Cropland"}
+    # How the annotation tool codes the SAME classes in its own true_col
+    # output -- may use different keys than stratum_labels, numeric or text
+    # (e.g. the tool might call cropland "2" while the map calls it "1"; here
+    # it's set to STAC Notator's own label-name spelling), but must describe
+    # the exact same set of classes, spelled identically. Used to relabel
+    # true_col onto the map's own coding so pred/true always mean the same
+    # thing at the same numeric value.
+    stratum_true_labels = {"Non-cropland": "Non-cropland", "Cropland": "Cropland"}
     cv_target = 0.05  # target relative precision (CV) on the cropland area estimate
     confidence = 0.95  # confidence level for the area estimate's CI
     pilot_n = 100  # pilot sample size
@@ -55,9 +56,11 @@ def main():
     # Column names expected in annotation-tool exports. Different tools may
     # name the point-id / true-class columns differently on export -- these
     # are the only two names that need to change to match whatever tool
-    # actually produced the annotated CSV (STAC Notator or otherwise).
+    # actually produced the annotated CSV. true_col is set to STAC Notator's
+    # own 'stacnotator_label_name' export column, so its raw export can be
+    # used directly as the annotated file with no renaming.
     id_col = "id"
-    true_col = "true_stratum"
+    true_col = "stacnotator_label_name"
 
     # Where to find each round's annotated file once STAC Notator work is
     # done -- update these if they're saved somewhere other than outputs/.
@@ -157,11 +160,13 @@ def main():
     # round-2 annotations in Step 6. `pilot_truth` is matched in on
     # `_sample_key`, not `id_col`, since `id_col` was just reassigned above
     # from this round's own shuffle and no longer matches the pilot's.
+    # `true_col` is passed explicitly so the carried-forward pilot label
+    # lands under the same column name used everywhere else in the pipeline.
     master_csv, master_geojson, _ = srs.export_sample_units(
         full_gdf,
         os.path.join(outputs_path, "bungoma2025_sample_units_master.csv"),
         os.path.join(outputs_path, "bungoma2025_sample_units_master.geojson"),
-        stratum_labels=stratum_labels, pilot_truth=pilot_annotated, id_col=id_col, v=True,
+        stratum_labels=stratum_labels, pilot_truth=pilot_annotated, id_col=id_col, true_col=true_col, v=True,
     )
 
     # Round-2 export: only the units NOT already annotated in the pilot.
