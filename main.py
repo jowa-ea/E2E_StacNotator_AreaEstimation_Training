@@ -45,7 +45,7 @@ def main():
     # describe the exact same set of classes, spelled identically. Used to
     # relabel true_stratum onto the map's own coding so pred/true always
     # mean the same thing at the same numeric value.
-    stratum_true_labels = {0: "Non-cropland", 1: "Cropland"}
+    stratum_true_labels = {1: "Non-cropland", 2: "Cropland"}
     cv_target = 0.10  # target relative precision (CV) on the cropland area estimate
     confidence = 0.95  # confidence level for the area estimate's CI
     pilot_n = 100  # pilot sample size
