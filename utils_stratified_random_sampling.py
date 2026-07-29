@@ -150,17 +150,22 @@ def draw_samples_nested(map_path, sample_allocation, seed=0, id_prefix="SU", out
     seed : int
         Base random seed.
     id_prefix : str
-        Sample-unit ids are f"{id_prefix}_{stratum}_{k:05d}", k = 1-indexed
-        acceptance order within the stratum -- nested draws share ids for
-        their shared units.
+        Each unit gets an internal `_sample_key`,
+        f"{id_prefix}_{stratum}_{k:05d}" (k = 1-indexed acceptance order
+        within the stratum) -- nested draws share keys for their shared
+        units. This is NOT the id exported for annotation: it deliberately
+        encodes stratum and draw order, which is fine for internal
+        matching (e.g. reusing pilot annotations inside the full sample)
+        but would defeat row shuffling if shown to an interpreter. The
+        exported `id` is assigned later, after shuffling, by `assign_ids`.
     out_gpkg : str, optional
         If given, also save the result as a GeoPackage.
     v : bool
 
     Returns
     -------
-    gpd.GeoDataFrame with columns ['id', 'stratum', 'row', 'col', 'geometry']
-    (geometry in the raster's own CRS).
+    gpd.GeoDataFrame with columns ['_sample_key', 'stratum', 'row', 'col',
+    'geometry'] (geometry in the raster's own CRS).
     """
     ds = gdal.Open(map_path)
     if ds is None:
@@ -171,7 +176,7 @@ def draw_samples_nested(map_path, sample_allocation, seed=0, id_prefix="SU", out
     gt = ds.GetGeoTransform()
     proj = ds.GetProjection()
 
-    records = {"id": [], "stratum": [], "row": [], "col": [], "geometry": []}
+    records = {"_sample_key": [], "stratum": [], "row": [], "col": [], "geometry": []}
 
     for stratum, n_samples in sample_allocation.items():
         rng = np.random.default_rng(np.random.SeedSequence([seed, int(stratum)]))
@@ -189,7 +194,7 @@ def draw_samples_nested(map_path, sample_allocation, seed=0, id_prefix="SU", out
                 x = gt[0] + (col + 0.5) * gt[1] + (row + 0.5) * gt[2]
                 y = gt[3] + (col + 0.5) * gt[4] + (row + 0.5) * gt[5]
 
-                records["id"].append(f"{id_prefix}_{stratum}_{k:05d}")
+                records["_sample_key"].append(f"{id_prefix}_{stratum}_{k:05d}")
                 records["stratum"].append(int(val))
                 records["row"].append(row)
                 records["col"].append(col)
@@ -234,6 +239,96 @@ def shuffle_samples(gdf, seed=0, out_gpkg=None, v=False):
             print(f"Saved shuffled samples to {out_gpkg}")
 
     return shuffled
+
+
+def assign_ids(gdf, id_col="id", id_prefix="SU", v=False):
+    """
+    Assign the exported/display id, in the GeoDataFrame's *current* row
+    order.
+
+    Call this right after `shuffle_samples` (never before draw order is
+    shuffled) -- if ids were assigned first and only the rows shuffled
+    afterwards, the id itself would still tell an interpreter each unit's
+    original per-stratum draw order (e.g. via `draw_samples_nested`'s
+    internal `_sample_key`), defeating the point of shuffling. Cross-round
+    matching (e.g. reusing pilot annotations inside the full sample) is
+    done on `_sample_key`, not this id, so reassigning it here doesn't
+    disturb that.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+    id_col : str
+    id_prefix : str
+        Exported ids are f"{id_prefix}_{k:05d}", k = 1-indexed row order.
+    v : bool
+
+    Returns
+    -------
+    gpd.GeoDataFrame, copy with `id_col` (re)assigned from row order.
+    """
+    out = gdf.copy()
+    out[id_col] = [f"{id_prefix}_{i + 1:05d}" for i in range(len(out))]
+
+    if v:
+        print(f"Assigned '{id_col}' for {len(out)} unit(s), in row order.")
+
+    return out
+
+
+def relabel_true_stratum(df, true_col, stratum_labels, true_labels):
+    """
+    Remap an annotation tool's raw `true_col` codes onto the map's own
+    stratum coding, by matching each code's text label.
+
+    An annotation tool may code the same classes with different numeric
+    values than the map does (e.g. it might call cropland "2" while the
+    map calls it "1"). `true_labels` (STRATUM_TRUE_LABELS) documents the
+    annotation tool's own {code: label} scheme; `stratum_labels`
+    (STRATUM_LABELS) is the map/pred coding. This translates each
+    `true_col` value to whichever `stratum_labels` code shares its label,
+    so numbers in `true` and `pred` mean the same thing before they're
+    ever compared (e.g. in a confusion matrix).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have `true_col`, holding raw codes matching `true_labels`'s keys.
+    true_col : str
+    stratum_labels : dict
+        {map_code: label} -- the map/pred coding.
+    true_labels : dict
+        {annotation_code: label} -- the annotation tool's own coding. Must
+        have exactly the same set of label values as `stratum_labels`
+        (the keys/codes may differ).
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `df` with `true_col` remapped to `stratum_labels` codes.
+    """
+    label_to_map_code = {label: code for code, label in stratum_labels.items()}
+
+    missing_labels = set(true_labels.values()) - set(label_to_map_code)
+    if missing_labels:
+        raise ValueError(
+            f"STRATUM_TRUE_LABELS has label(s) {missing_labels} with no matching "
+            f"label in STRATUM_LABELS {stratum_labels} -- their labels must match "
+            "(codes may differ)."
+        )
+
+    code_translation = {true_code: label_to_map_code[label] for true_code, label in true_labels.items()}
+
+    out = df.copy()
+    unknown = ~out[true_col].isin(code_translation)
+    if unknown.any():
+        bad = sorted(out.loc[unknown, true_col].dropna().unique())
+        raise ValueError(
+            f"'{true_col}' contains value(s) not in STRATUM_TRUE_LABELS {true_labels}: {bad}"
+        )
+    out[true_col] = out[true_col].map(code_translation)
+
+    return out
 
 
 def compute_pilot_variances(strata, pred, true, output_csv=None, v=False):
@@ -456,7 +551,8 @@ def reconcile_allocation_with_pilot(neyman_allocation, pilot_allocation, v=False
 
 
 def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
-                         pilot_truth=None, id_col="id", stratum_col="stratum", v=False):
+                         pilot_truth=None, id_col="id", stratum_col="stratum",
+                         match_col="_sample_key", v=False):
     """
     Reproject a sample GeoDataFrame to EPSG:4326 and export it as CSV
     (lat/lon columns) and GeoJSON (point geometry) for use in an external
@@ -465,7 +561,9 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
     Parameters
     ----------
     gdf : gpd.GeoDataFrame
-        Sample units, e.g. from `draw_samples_nested` (any CRS).
+        Sample units, e.g. from `draw_samples_nested` (any CRS). Should
+        already be shuffled (`shuffle_samples`) with `id_col` assigned
+        from that shuffled order (`assign_ids`) before calling this.
     out_csv, out_geojson : str
         Output paths.
     stratum_labels : dict
@@ -473,11 +571,23 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
         {0: "Non-cropland", 1: "Cropland"}.
     pilot_truth : pd.DataFrame, optional
         Annotated pilot sample (e.g. from `load_pilot_annotations`), with
-        at least [id_col, 'true_stratum']. Where a unit's id matches a
-        pilot id, its annotation is copied in and `in_pilot` set True --
-        those units are already labeled and don't need re-annotating, which
-        is what makes the pilot sample "reusable" within the full sample.
-    id_col, stratum_col : str
+        at least [match_col, 'true_stratum']. Where a unit's `match_col`
+        matches a pilot unit's, its annotation is copied in and `in_pilot`
+        set True -- those units are already labeled and don't need
+        re-annotating, which is what makes the pilot sample "reusable"
+        within the full sample. Matching is done on `match_col` (the
+        stable internal key from `draw_samples_nested`), not `id_col`,
+        since `id_col` is reassigned after each round's own shuffle and so
+        differs between the pilot's export and this one for the same unit.
+
+        When `pilot_truth` is given, `true_stratum`/`true_stratum_label`
+        are included in the export to carry those known pilot values
+        forward (this is the master bookkeeping file). When it's None
+        (a fresh annotation-round export), those columns are omitted
+        entirely -- the annotation tool (e.g. STAC Notator) adds its own
+        `true_stratum` when the file comes back annotated, so there's no
+        need to ship an empty placeholder column out to it.
+    id_col, stratum_col, match_col : str
     v : bool
 
     Returns
@@ -490,20 +600,23 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
     out["stratum_label"] = out[stratum_col].map(stratum_labels)
 
     out["in_pilot"] = False
-    out["true_stratum"] = pd.NA
-    out["true_stratum_label"] = pd.NA
+
+    cols = [id_col, "lat", "lon", stratum_col, "stratum_label", "in_pilot"]
 
     if pilot_truth is not None:
-        truth = pilot_truth.set_index(id_col)
-        matched = out[id_col].isin(truth.index)
+        out["true_stratum"] = pd.NA
+        out["true_stratum_label"] = pd.NA
+
+        truth = pilot_truth.set_index(match_col)
+        matched = out[match_col].isin(truth.index)
         out.loc[matched, "in_pilot"] = True
-        out.loc[matched, "true_stratum"] = out.loc[matched, id_col].map(truth["true_stratum"])
+        out.loc[matched, "true_stratum"] = out.loc[matched, match_col].map(truth["true_stratum"])
         if "true_stratum_label" in truth.columns:
-            out.loc[matched, "true_stratum_label"] = out.loc[matched, id_col].map(truth["true_stratum_label"])
+            out.loc[matched, "true_stratum_label"] = out.loc[matched, match_col].map(truth["true_stratum_label"])
         else:
             out.loc[matched, "true_stratum_label"] = out.loc[matched, "true_stratum"].map(stratum_labels)
 
-    cols = [id_col, "lat", "lon", stratum_col, "stratum_label", "in_pilot", "true_stratum", "true_stratum_label"]
+        cols += ["true_stratum", "true_stratum_label"]
 
     out_csv_df = out[cols].copy()
     out_csv_df.to_csv(out_csv, index=False)
@@ -522,7 +635,8 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
 
 
 def combine_annotation_rounds(master_csv_path, round2_annotated_csv_path, out_csv_path,
-                               id_col="id", true_col="true_stratum"):
+                               id_col="id", true_col="true_stratum",
+                               stratum_labels=None, true_labels=None):
     """
     Combine the pilot round's annotations (already filled into the master
     full-sample export by `export_sample_units`, via `pilot_truth=`) with
@@ -534,12 +648,22 @@ def combine_annotation_rounds(master_csv_path, round2_annotated_csv_path, out_cs
     ----------
     master_csv_path : str
         The full-sample export from `export_sample_units` (has `true_col`
-        filled for pilot units, blank for the rest).
+        filled for pilot units, blank for the rest). The pilot's `true_col`
+        values were already relabeled onto the map's coding when they were
+        first loaded (see `load_pilot_annotations`), so only round-2's raw
+        values need relabeling here.
     round2_annotated_csv_path : str
         Annotated round-2 CSV; must have at least [id_col, true_col] for
         the units NOT in the pilot.
     out_csv_path : str
     id_col, true_col : str
+    stratum_labels, true_labels : dict, optional
+        STRATUM_LABELS (map coding) and STRATUM_TRUE_LABELS (the
+        annotation tool's own coding for `true_col`). When both are given,
+        round-2's `true_col` is relabeled via `relabel_true_stratum` onto
+        the map's coding before being merged into `master`. If either is
+        omitted, `true_col` is used as-is (assumed already in the map's
+        coding).
 
     Returns
     -------
@@ -558,6 +682,9 @@ def combine_annotation_rounds(master_csv_path, round2_annotated_csv_path, out_cs
     missing = {id_col, true_col} - set(round2.columns)
     if missing:
         raise ValueError(f"Round-2 annotated file is missing required column(s): {missing}")
+
+    if stratum_labels is not None and true_labels is not None:
+        round2 = relabel_true_stratum(round2, true_col, stratum_labels, true_labels)
 
     round2_truth = round2.set_index(id_col)[true_col]
     still_blank = master[true_col].isna()
@@ -806,7 +933,8 @@ def compute_accuracy_metrics(pixel_counts, pred, true, output_csv=None, v=False)
     return class_df, overall
 
 
-def load_pilot_annotations(pilot_gdf, annotated_csv_path, id_col="id", true_col="true_stratum"):
+def load_pilot_annotations(pilot_gdf, annotated_csv_path, id_col="id", true_col="true_stratum",
+                            stratum_labels=None, true_labels=None):
     """
     Load a pilot sample back in after external annotation (e.g. via STAC
     Notator) and align it with the map-predicted stratum of each unit, for
@@ -815,20 +943,34 @@ def load_pilot_annotations(pilot_gdf, annotated_csv_path, id_col="id", true_col=
     Parameters
     ----------
     pilot_gdf : gpd.GeoDataFrame
-        The pilot sample as drawn by `draw_samples_nested` (has 'id' and
-        'stratum', the map-predicted class).
+        The pilot sample as drawn/prepared for export (has 'id',
+        '_sample_key', and 'stratum', the map-predicted class). The
+        annotation round-trip only preserves `id_col` (whatever the
+        annotation tool hands back), so this merges on `id_col` but keeps
+        `_sample_key` along for the ride -- that's the stable key needed
+        later to match these pilot annotations into the full sample, since
+        `id_col` itself gets reassigned to a new value after the full
+        sample's own shuffle.
     annotated_csv_path : str
         Path to the annotated CSV; must have at least [id_col, true_col].
     id_col, true_col : str
+    stratum_labels, true_labels : dict, optional
+        STRATUM_LABELS (map coding) and STRATUM_TRUE_LABELS (the
+        annotation tool's own coding for `true_col`). When both are given,
+        `true_col` is relabeled via `relabel_true_stratum` onto the map's
+        coding before anything is compared against `pred` -- this is what
+        lets the annotation tool use its own numeric codes for the same
+        classes. If either is omitted, `true_col` is used as-is (assumed
+        already in the map's coding).
 
     Returns
     -------
     pred : list
         Map-predicted stratum per pilot unit.
     true : list
-        Annotated (reference) stratum per pilot unit.
+        Annotated (reference) stratum per pilot unit, in the map's coding.
     merged : pd.DataFrame
-        Columns [id_col, 'stratum', true_col].
+        Columns [id_col, '_sample_key', 'stratum', true_col].
     """
     if not os.path.exists(annotated_csv_path):
         raise FileNotFoundError(
@@ -842,7 +984,12 @@ def load_pilot_annotations(pilot_gdf, annotated_csv_path, id_col="id", true_col=
     if missing:
         raise ValueError(f"Annotated pilot file is missing required column(s): {missing}")
 
-    merged = pilot_gdf[[id_col, "stratum"]].merge(annotated[[id_col, true_col]], on=id_col, how="inner")
+    if stratum_labels is not None and true_labels is not None:
+        annotated = relabel_true_stratum(annotated, true_col, stratum_labels, true_labels)
+
+    merged = pilot_gdf[[id_col, "_sample_key", "stratum"]].merge(
+        annotated[[id_col, true_col]], on=id_col, how="inner"
+    )
     if len(merged) < len(pilot_gdf):
         missing_ids = sorted(set(pilot_gdf[id_col]) - set(merged[id_col]))
         print(

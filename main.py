@@ -38,6 +38,14 @@ def main():
     strata = [0, 1]  # 0 = non-cropland, 1 = cropland
     stratum_labels = {0: "Non-cropland", 1: "Cropland"}
     target_stratum = 1  # cropland: the stratum the accuracy threshold applies to
+
+    # How the annotation tool codes the SAME classes in its own true_stratum
+    # output -- may use different numeric keys than stratum_labels (e.g. the
+    # tool might call cropland "2" while the map calls it "1"), but must
+    # describe the exact same set of classes, spelled identically. Used to
+    # relabel true_stratum onto the map's own coding so pred/true always
+    # mean the same thing at the same numeric value.
+    stratum_true_labels = {0: "Non-cropland", 1: "Cropland"}
     cv_target = 0.10  # target relative precision (CV) on the cropland area estimate
     confidence = 0.95  # confidence level for the area estimate's CI
     pilot_n = 100  # pilot sample size
@@ -83,6 +91,14 @@ def main():
     pilot_gdf = srs.draw_samples_nested(
         crop_map_2025_ea, pilot_allocation, seed=seed, id_prefix="BGM25", v=True
     )
+
+    # Shuffle row order first, then assign the exported `id` from that shuffled
+    # order -- assigning id before shuffling would let its value still betray
+    # each unit's original per-stratum draw order, even after the rows
+    # themselves were reordered.
+    pilot_gdf = srs.shuffle_samples(pilot_gdf, seed=seed)
+    pilot_gdf = srs.assign_ids(pilot_gdf, id_col=id_col, id_prefix="BGM25", v=True)
+
     pilot_csv, pilot_geojson, _ = srs.export_sample_units(
         pilot_gdf,
         os.path.join(outputs_path, "pilot_sample_for_annotation.csv"),
@@ -102,7 +118,8 @@ def main():
         return
 
     pilot_pred, pilot_true, pilot_annotated = srs.load_pilot_annotations(
-        pilot_gdf, pilot_annotated_path, id_col=id_col, true_col=true_col
+        pilot_gdf, pilot_annotated_path, id_col=id_col, true_col=true_col,
+        stratum_labels=stratum_labels, true_labels=stratum_true_labels,
     )
 
     # Step 4. Neyman priors, total sample size, and per-stratum allocation
@@ -125,14 +142,21 @@ def main():
     # E.g. if Neyman calls for 600 units total and the pilot already covered
     # 100 of them, only the other 500 get exported for round-2 annotation.
     full_gdf = srs.draw_samples_nested(crop_map_2025_ea, allocation, seed=seed, id_prefix="BGM25", v=True)
-    assert set(pilot_gdf[id_col]) <= set(full_gdf[id_col]), "pilot sample did not nest inside the full sample"
+    # Matched on `_sample_key` (the stable per-stratum draw-order key), not
+    # `id_col` -- `id_col` hasn't been (re)assigned for full_gdf yet, and is
+    # reassigned independently per round anyway (see below).
+    assert set(pilot_gdf["_sample_key"]) <= set(full_gdf["_sample_key"]), \
+        "pilot sample did not nest inside the full sample"
     print(f"{len(pilot_gdf)} pilot units confirmed nested inside the {len(full_gdf)}-unit full sample.")
 
     full_gdf = srs.shuffle_samples(full_gdf, seed=seed)
+    full_gdf = srs.assign_ids(full_gdf, id_col=id_col, id_prefix="BGM25", v=True)
 
     # Master export: all n_tot units, with the pilot's own annotations
     # already filled in -- kept as the bookkeeping file combined with the
-    # round-2 annotations in Step 6.
+    # round-2 annotations in Step 6. `pilot_truth` is matched in on
+    # `_sample_key`, not `id_col`, since `id_col` was just reassigned above
+    # from this round's own shuffle and no longer matches the pilot's.
     master_csv, master_geojson, _ = srs.export_sample_units(
         full_gdf,
         os.path.join(outputs_path, "bungoma2025_sample_units_master.csv"),
@@ -141,7 +165,7 @@ def main():
     )
 
     # Round-2 export: only the units NOT already annotated in the pilot.
-    round2_gdf = full_gdf[~full_gdf[id_col].isin(pilot_annotated[id_col])].copy()
+    round2_gdf = full_gdf[~full_gdf["_sample_key"].isin(pilot_annotated["_sample_key"])].copy()
     round2_csv, round2_geojson, _ = srs.export_sample_units(
         round2_gdf,
         os.path.join(outputs_path, "bungoma2025_sample_units_round2_for_annotation.csv"),
@@ -170,7 +194,8 @@ def main():
     # estimate (Olofsson et al., 2014).
     annotated_path = os.path.join(outputs_path, "bungoma2025_sample_units_annotated.csv")
     srs.combine_annotation_rounds(
-        master_csv, round2_annotated_path, annotated_path, id_col=id_col, true_col=true_col
+        master_csv, round2_annotated_path, annotated_path, id_col=id_col, true_col=true_col,
+        stratum_labels=stratum_labels, true_labels=stratum_true_labels,
     )
     pred, true, annotated_df = srs.load_full_annotations(
         annotated_path, id_col=id_col, stratum_col="stratum", true_col=true_col
