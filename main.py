@@ -97,7 +97,7 @@ def main():
     # each unit's original per-stratum draw order, even after the rows
     # themselves were reordered.
     pilot_gdf = srs.shuffle_samples(pilot_gdf, seed=seed)
-    pilot_gdf = srs.assign_ids(pilot_gdf, id_col=id_col, id_prefix="BGM25", v=True)
+    pilot_gdf = srs.assign_ids(pilot_gdf, id_col=id_col, v=True)
 
     pilot_csv, pilot_geojson, _ = srs.export_sample_units(
         pilot_gdf,
@@ -150,7 +150,7 @@ def main():
     print(f"{len(pilot_gdf)} pilot units confirmed nested inside the {len(full_gdf)}-unit full sample.")
 
     full_gdf = srs.shuffle_samples(full_gdf, seed=seed)
-    full_gdf = srs.assign_ids(full_gdf, id_col=id_col, id_prefix="BGM25", v=True)
+    full_gdf = srs.assign_ids(full_gdf, id_col=id_col, v=True)
 
     # Master export: all n_tot units, with the pilot's own annotations
     # already filled in -- kept as the bookkeeping file combined with the

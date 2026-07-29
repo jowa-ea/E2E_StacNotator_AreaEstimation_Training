@@ -241,10 +241,10 @@ def shuffle_samples(gdf, seed=0, out_gpkg=None, v=False):
     return shuffled
 
 
-def assign_ids(gdf, id_col="id", id_prefix="SU", v=False):
+def assign_ids(gdf, id_col="id", v=False):
     """
-    Assign the exported/display id, in the GeoDataFrame's *current* row
-    order.
+    Assign the exported/display id, as sequential integers (0 to n-1) in
+    the GeoDataFrame's *current* row order.
 
     Call this right after `shuffle_samples` (never before draw order is
     shuffled) -- if ids were assigned first and only the rows shuffled
@@ -259,8 +259,6 @@ def assign_ids(gdf, id_col="id", id_prefix="SU", v=False):
     ----------
     gdf : gpd.GeoDataFrame
     id_col : str
-    id_prefix : str
-        Exported ids are f"{id_prefix}_{k:05d}", k = 1-indexed row order.
     v : bool
 
     Returns
@@ -268,7 +266,7 @@ def assign_ids(gdf, id_col="id", id_prefix="SU", v=False):
     gpd.GeoDataFrame, copy with `id_col` (re)assigned from row order.
     """
     out = gdf.copy()
-    out[id_col] = [f"{id_prefix}_{i + 1:05d}" for i in range(len(out))]
+    out[id_col] = range(len(out))
 
     if v:
         print(f"Assigned '{id_col}' for {len(out)} unit(s), in row order.")
