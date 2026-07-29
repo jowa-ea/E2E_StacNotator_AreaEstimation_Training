@@ -102,10 +102,9 @@ def main():
     pilot_gdf = srs.shuffle_samples(pilot_gdf, seed=seed)
     pilot_gdf = srs.assign_ids(pilot_gdf, id_col=id_col, v=True)
 
-    pilot_csv, pilot_geojson, _ = srs.export_sample_units(
+    pilot_csv, _ = srs.export_sample_units(
         pilot_gdf,
         os.path.join(outputs_path, "pilot_sample_for_annotation.csv"),
-        os.path.join(outputs_path, "pilot_sample_for_annotation.geojson"),
         stratum_labels=stratum_labels, id_col=id_col, v=True,
     )
 
@@ -114,7 +113,7 @@ def main():
     # pilot_annotated_path, then re-run the script to continue.
     if not os.path.exists(pilot_annotated_path):
         print(
-            f"\nPilot sample exported to:\n  {pilot_csv}\n  {pilot_geojson}\n"
+            f"\nPilot sample exported to:\n  {pilot_csv}\n"
             f"Annotate it in STAC Notator, save the result to:\n  {pilot_annotated_path}\n"
             f"(with columns '{id_col}' and '{true_col}'), then re-run this script to continue."
         )
@@ -162,24 +161,22 @@ def main():
     # from this round's own shuffle and no longer matches the pilot's.
     # `true_col` is passed explicitly so the carried-forward pilot label
     # lands under the same column name used everywhere else in the pipeline.
-    master_csv, master_geojson, _ = srs.export_sample_units(
+    master_csv, _ = srs.export_sample_units(
         full_gdf,
         os.path.join(outputs_path, "bungoma2025_sample_units_master.csv"),
-        os.path.join(outputs_path, "bungoma2025_sample_units_master.geojson"),
         stratum_labels=stratum_labels, pilot_truth=pilot_annotated, id_col=id_col, true_col=true_col, v=True,
     )
 
     # Round-2 export: only the units NOT already annotated in the pilot.
     round2_gdf = full_gdf[~full_gdf["_sample_key"].isin(pilot_annotated["_sample_key"])].copy()
-    round2_csv, round2_geojson, _ = srs.export_sample_units(
+    round2_csv, _ = srs.export_sample_units(
         round2_gdf,
         os.path.join(outputs_path, "bungoma2025_sample_units_round2_for_annotation.csv"),
-        os.path.join(outputs_path, "bungoma2025_sample_units_round2_for_annotation.geojson"),
         stratum_labels=stratum_labels, id_col=id_col, v=True,
     )
     print(
         f"\n{len(pilot_annotated)} unit(s) already annotated from the pilot round; "
-        f"{len(round2_gdf)} unit(s) exported for round-2 annotation:\n  {round2_csv}\n  {round2_geojson}"
+        f"{len(round2_gdf)} unit(s) exported for round-2 annotation:\n  {round2_csv}"
     )
 
     # Checkpoint (round 2): annotate the round-2 file in STAC Notator and

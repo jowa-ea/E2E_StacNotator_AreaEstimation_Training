@@ -217,8 +217,8 @@ def draw_samples_nested(map_path, sample_allocation, seed=0, id_prefix="SU", out
 def shuffle_samples(gdf, seed=0, out_gpkg=None, v=False):
     """
     Randomly shuffle sample-unit row order (without changing which units
-    were selected), so an interpreter working through the exported CSV/
-    GeoJSON top to bottom isn't shown long runs of the same stratum.
+    were selected), so an interpreter working through the exported CSV
+    top to bottom isn't shown long runs of the same stratum.
 
     Parameters
     ----------
@@ -318,9 +318,18 @@ def relabel_true_stratum(df, true_col, stratum_labels, true_labels):
     code_translation = {true_code: label_to_map_code[label] for true_code, label in true_labels.items()}
 
     out = df.copy()
-    unknown = ~out[true_col].isin(code_translation)
+    # Rows with no value yet (not-yet-annotated units) are left as missing,
+    # not treated as invalid -- they're a normal, expected state while
+    # annotation is still in progress, and the callers of this function
+    # (combine_annotation_rounds, load_pilot_annotations) already have their
+    # own clear "still needs annotation" checks downstream. Flagging them
+    # here as "unknown values" would preempt that clearer error with a
+    # confusing one (an empty list of "bad values", since there's nothing
+    # actually invalid about a blank cell).
+    present = out[true_col].notna()
+    unknown = present & ~out[true_col].isin(code_translation)
     if unknown.any():
-        bad = sorted(out.loc[unknown, true_col].dropna().unique())
+        bad = sorted(out.loc[unknown, true_col].unique())
         raise ValueError(
             f"'{true_col}' contains value(s) not in STRATUM_TRUE_LABELS {true_labels}: {bad}"
         )
@@ -548,13 +557,13 @@ def reconcile_allocation_with_pilot(neyman_allocation, pilot_allocation, v=False
     return reconciled
 
 
-def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
+def export_sample_units(gdf, out_csv, stratum_labels,
                          pilot_truth=None, id_col="id", stratum_col="stratum",
                          match_col="_sample_key", true_col="true_stratum", v=False):
     """
     Reproject a sample GeoDataFrame to EPSG:4326 and export it as CSV
-    (lat/lon columns) and GeoJSON (point geometry) for use in an external
-    annotation tool (e.g. STAC Notator).
+    (lat/lon columns) for use in an external annotation tool (e.g. STAC
+    Notator).
 
     Parameters
     ----------
@@ -562,8 +571,8 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
         Sample units, e.g. from `draw_samples_nested` (any CRS). Should
         already be shuffled (`shuffle_samples`) with `id_col` assigned
         from that shuffled order (`assign_ids`) before calling this.
-    out_csv, out_geojson : str
-        Output paths.
+    out_csv : str
+        Output path.
     stratum_labels : dict
         Maps numeric stratum value -> text label, e.g.
         {0: "Non-cropland", 1: "Cropland"}.
@@ -590,7 +599,7 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
 
     Returns
     -------
-    (csv_path, geojson_path, exported_dataframe)
+    (csv_path, exported_dataframe)
     """
     out = gdf.to_crs(4326).copy()
     out["lon"] = out.geometry.x
@@ -619,17 +628,12 @@ def export_sample_units(gdf, out_csv, out_geojson, stratum_labels,
     out_csv_df = out[cols].copy()
     out_csv_df.to_csv(out_csv, index=False)
 
-    out_geojson_gdf = gpd.GeoDataFrame(out[cols + ["geometry"]], geometry="geometry", crs=4326)
-    if os.path.exists(out_geojson):
-        os.remove(out_geojson)
-    out_geojson_gdf.to_file(out_geojson, driver="GeoJSON")
-
     if v:
-        print(f"Saved {len(out)} sample units to:\n  {out_csv}\n  {out_geojson}")
+        print(f"Saved {len(out)} sample units to:\n  {out_csv}")
         if pilot_truth is not None:
             print(f"  {int(out['in_pilot'].sum())} unit(s) already annotated from the pilot round.")
 
-    return out_csv, out_geojson, out_csv_df
+    return out_csv, out_csv_df
 
 
 def combine_annotation_rounds(master_csv_path, round2_annotated_csv_path, out_csv_path,

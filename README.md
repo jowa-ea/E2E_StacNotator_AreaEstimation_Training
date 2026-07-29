@@ -64,8 +64,8 @@ collected by interpreting each sampled point against satellite imagery in
    projection centered on a raster's own extent.
 4. `utils_stratified_random_sampling.py` -- pixel counting, proportional
    and Neyman allocation, the seed-nested pilot/full sample draw,
-   CSV/GeoJSON export with pilot-annotation reuse, combining the two
-   annotation rounds, and the final area/accuracy estimators. The
+   CSV export with pilot-annotation reuse, combining the two annotation
+   rounds, and the final area/accuracy estimators. The
    annotation-tool's id/true-class column names (`id_col`/`true_col`) are
    parameters throughout, since different tools may export them under
    different names.
