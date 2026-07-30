@@ -1,0 +1,1 @@
++proj=laea +lat_0=-0.829101950736314 +lon_0=37.063770977924925 +datum=WGS84 +units=m +no_defs

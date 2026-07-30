@@ -559,7 +559,8 @@ def reconcile_allocation_with_pilot(neyman_allocation, pilot_allocation, v=False
 
 def export_sample_units(gdf, out_csv, stratum_labels,
                          pilot_truth=None, id_col="id", stratum_col="stratum",
-                         match_col="_sample_key", true_col="true_stratum", v=False):
+                         match_col="_sample_key", true_col="true_stratum",
+                         extra_cols=None, v=False):
     """
     Reproject a sample GeoDataFrame to EPSG:4326 and export it as CSV
     (lat/lon columns) for use in an external annotation tool (e.g. STAC
@@ -595,6 +596,13 @@ def export_sample_units(gdf, out_csv, stratum_labels,
         true-label column when the file comes back annotated, so there's
         no need to ship an empty placeholder column out to it.
     id_col, stratum_col, match_col, true_col : str
+    extra_cols : list of str, optional
+        Extra column names, already present on `gdf`, to carry through into the
+        export as-is (e.g. a `county` tag when `gdf` combines samples drawn from
+        more than one map). These are for the exported file's own context/
+        bookkeeping only -- nothing downstream should assume an annotation tool
+        preserves an unrecognized column through its own export, the way this
+        pipeline already assumes it preserves `id_col`/`true_col`.
     v : bool
 
     Returns
@@ -609,6 +617,8 @@ def export_sample_units(gdf, out_csv, stratum_labels,
     out["in_pilot"] = False
 
     cols = [id_col, "lat", "lon", stratum_col, "stratum_label", "in_pilot"]
+    if extra_cols:
+        cols += list(extra_cols)
 
     if pilot_truth is not None:
         out[true_col] = pd.NA
