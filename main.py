@@ -14,6 +14,11 @@ the script pauses at until the corresponding file exists in outputs/:
   2. The round-2 sample -- only the units NOT already covered by the pilot
      (needed, combined with the pilot's own annotations, for the final
      area/accuracy estimate).
+
+For training sessions with many participants, see main_large_groups.py
+instead: a single-round variant that sizes the sample directly from the
+training group (n_participants * n_samples_per_participant) with
+proportional allocation, rather than a pilot-derived Neyman design.
 """
 
 import os
